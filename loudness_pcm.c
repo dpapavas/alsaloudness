@@ -876,7 +876,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
 #endif
 
     int install = 0, uninstall = 0;
-    const char *prefix;
+    const char *prefix = NULL;
 
     int e;
 
@@ -1026,7 +1026,12 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
     context->lengths[0] = window_length;
     context->lengths[1] = fft_length;
 
-    context->prefix = strdup(prefix);
+    if (prefix) {
+        context->prefix = strdup(prefix);
+    } else {
+	context->prefix = NULL;
+    }
+
     context->values[REFERENCE] = reference;
     context->values[ATTENUATION] = attenuation;
     context->values[COMPENSATE] = compensate;
