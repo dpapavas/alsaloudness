@@ -68,10 +68,9 @@ struct context {
 
     char *prefix;
 
-    /* Impulse response, FFT and design-phase interpolation length, in
-     * that order. */
-
-    unsigned int lengths[3];
+    unsigned int impulse_length;
+    unsigned int fft_length;
+    unsigned int interpolation_length;
 
     /* Filtering-related stuff. */
 
@@ -125,8 +124,8 @@ static float kaiser(float i, float l, float beta)
 
 static void update_filter_weights(struct context *context)
 {
-    const unsigned int M = context->lengths[0];
-    const unsigned int L = context->lengths[2];
+    const unsigned int M = context->impulse_length;
+    const unsigned int L = context->interpolation_length;
     const float delta_f = (float)context->ext.rate / L;
 
     unsigned int i, j;
@@ -218,8 +217,8 @@ static void update_filter_weights(struct context *context)
             fp = fopen("parameters", "w");
 
             fprintf(fp, "%u %u %u %u %d %d %f\n",
-                    context->lengths[0], context->lengths[1],
-                    context->lengths[2], context->ext.rate,
+                    context->impulse_length, context->fft_length,
+                    context->interpolation_length, context->ext.rate,
                     context->values[REFERENCE], context->values[ATTENUATION],
                     beta);
 
@@ -239,7 +238,7 @@ static void update_filter_weights(struct context *context)
 #ifdef PLOT_FILTER
     {
         FILE *fp;
-        const unsigned int N = context->lengths[1];
+        const unsigned int N = context->fft_length;
         const float delta_f = (float)context->ext.rate / N;
 
         fp = fopen("realized", "w");
@@ -302,8 +301,8 @@ static snd_pcm_sframes_t transfer_callback(
     unsigned int i;
     int j;
 
-    const unsigned int M = context->lengths[0];
-    const unsigned int N = context->lengths[1];
+    const unsigned int M = context->impulse_length;
+    const unsigned int N = context->fft_length;
     const int C = ext->channels;
 
     /* Handle any pending ctl events and update the filter, if
@@ -483,7 +482,7 @@ static snd_pcm_sframes_t transfer_callback(
 static int init_callback(snd_pcm_extplug_t *ext)
 {
     struct context *context = (struct context *)ext->private_data;
-    const unsigned int N = context->lengths[1];
+    const unsigned int N = context->fft_length;
     unsigned int L;
     const int C = ext->channels;
 
@@ -516,7 +515,7 @@ static int init_callback(snd_pcm_extplug_t *ext)
     */
 
     int plan_flags = context->wisdom_path ? FFTW_MEASURE : FFTW_ESTIMATE;
-    context->lengths[2] = L = 1 << ((int)(ceilf(log2f((float)ext->rate / 2))));
+    context->interpolation_length = L = 1 << ((int)(ceilf(log2f((float)ext->rate / 2))));
 
     context->input = (float *)fftwf_malloc(sizeof(float) * N * C);
     context->output = (float *)fftwf_malloc(sizeof(float) * N * C);
@@ -1042,8 +1041,8 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
     context->threads = threads;
 #endif
 
-    context->lengths[0] = window_length;
-    context->lengths[1] = fft_length;
+    context->impulse_length = window_length;
+    context->fft_length = fft_length;
 
     if (prefix) {
         context->prefix = strdup(prefix);
