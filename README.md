@@ -16,6 +16,8 @@ This involves a couple of steps.
 
 Compilation and installation of the module, can be achieved through the usual `make && sudo make install`, which, by default, will place the plugin in `/usr/local/lib`.  Once the plugin is installed, the per-user or global ALSA configuration (typically residing in `~/.asoundrc` and `/etc/asound.conf` respectively), will need to be amended as shown in the provided example `asoundrc` file.
 
+On 64-bit systems running 32-bit applications, you must also install the 32-bit version of the plugin by using `make clean && make LIB32=yes && sudo make install LIB32=yes`.
+
 If everything works out, the `loudness` PCM should now be available.  This can be set as the default PCM, if loudness compensation is desired for all audio output, otherwise only specific applications, such as MPD for instance, can be directed to use it.
 
 One way to test whether the setup is working, is through the use of `aplay` as follows:

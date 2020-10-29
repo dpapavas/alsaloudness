@@ -2,6 +2,7 @@ DEBUG = no	# Set to yes, for a debug build.
 BENCHMARK = no	# Set to yes, for an optimized build with debug output.
 THREADED = yes	# Set to no, to disable multithreading.
 PLOT = no	# Set to yes, to enable dumping of filter response plots.
+LIB32= no # Set to yes, to build lib32 version for 64-bit systems
 
 PREFIX = /usr/local
 LIBDIR = $(PREFIX)/lib
@@ -29,6 +30,11 @@ endif
 ifeq ($(THREADED),yes)
 CFLAGS += -DWITH_THREADS
 LDFLAGS += -lfftw3f_threads
+endif
+
+ifeq ($(LIB32),yes)
+CFLAGS += -m32
+LIBDIR = $(PREFIX)/lib32
 endif
 
 all: libasound_module_pcm_loudness.so
