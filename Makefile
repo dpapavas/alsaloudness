@@ -7,7 +7,7 @@ PREFIX = /usr/local
 LIBDIR = $(PREFIX)/lib
 
 CFLAGS = -fPIC -DPIC
-CFLAGS += -Wall -Wextra -Wpedantic
+CFLAGS += -Wall -Wextra -Wpedantic -Wno-unused-parameter
 
 LDFLAGS=-lm -lasound -lfftw3f
 INSTALL=/usr/bin/install

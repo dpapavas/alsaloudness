@@ -19,12 +19,17 @@ pcm.plugloudness {
 
     # threads 1
 
-    # The values control the length of the FIR filter, used to perform
-    # the compensation, and of the FFT, that implements it.  The
-    # defaults should serve in most cases.
+    # This optional value controls the length of the FIR filter, used
+    # to perform the compensation. The default value of 4096 is a good
+    # compromise.
 
     # window 4096
-    # fft 16384
+
+    # This optional value controls the length of the FFT, that
+    # implements the filter. Omit (or set to zero) to determine the
+    # best length at run-time.
+
+    # fft 0
 
     # The setting below is optional. If it points to a writeable file,
     # it will be used as cache to save some CPU time, at the cost of a
