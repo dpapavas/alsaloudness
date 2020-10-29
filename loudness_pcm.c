@@ -89,6 +89,8 @@ struct context {
 
     int values[CONTROLS_COUNT];
 
+    const char* wisdom_path;
+
 #ifdef WITH_THREADS
     int threads;
 #endif
@@ -513,6 +515,7 @@ static int init_callback(snd_pcm_extplug_t *ext)
 
     */
 
+    int plan_flags = context->wisdom_path ? FFTW_MEASURE : FFTW_ESTIMATE;
     context->lengths[2] = L = 1 << ((int)(ceilf(log2f((float)ext->rate / 2))));
 
     context->input = (float *)fftwf_malloc(sizeof(float) * N * C);
@@ -526,13 +529,13 @@ static int init_callback(snd_pcm_extplug_t *ext)
         1, (const int []) {N}, C,
         context->input, NULL, C, 1,
         context->bins, NULL, C, 1,
-        FFTW_ESTIMATE);
+        plan_flags);
 
     context->bins_to_output = fftwf_plan_many_dft_c2r(
         1, (const int []) {N}, C,
         context->bins, NULL, C, 1,
         context->output, NULL, C, 1,
-        FFTW_ESTIMATE);
+        plan_flags);
 
     /* This is necessary, in order to avoid filtering uninitialized
      * data during the first few transfer callbacks, before the input
@@ -550,12 +553,17 @@ static int init_callback(snd_pcm_extplug_t *ext)
     context->kernel_to_weights = fftwf_plan_dft_r2c_1d(N,
                                                        context->kernel,
                                                        context->weights,
-                                                       FFTW_ESTIMATE);
+                                                       plan_flags);
 
     context->spline_to_kernel = fftwf_plan_dft_c2r_1d(L,
                                                       context->spline,
                                                       context->kernel,
-                                                      FFTW_ESTIMATE);
+                                                      plan_flags);
+
+    /* No more planning needs to be done, save FFTW wisdom if required */
+    if(context->wisdom_path && fftwf_export_wisdom_to_filename(context->wisdom_path) != 1) {
+        SNDERR("Failed saving wisdom to %s, continuing anyway", context->wisdom_path);
+    }
 
 #ifndef NDEBUG
     {
@@ -876,7 +884,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
 #endif
 
     int install = 0, uninstall = 0;
-    const char *prefix = NULL;
+    const char *prefix = NULL, *wisdom_path = NULL;
 
     int e;
 
@@ -994,6 +1002,17 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
             continue;
         }
 
+        if(strcmp(id, "wisdom_path") == 0) {
+            const char* s;
+            snd_config_get_string(n, &s);
+            wisdom_path = strdup(s);
+            if(wisdom_path == NULL) {
+                SYSERR("strdup");
+                return -EINVAL;
+            }
+            continue;
+        }
+
         SNDERR("Unknown field %s", id);
         return -EINVAL;
     }
@@ -1028,8 +1047,13 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
 
     if (prefix) {
         context->prefix = strdup(prefix);
+        if(context->prefix == NULL) {
+            SYSERR("strdup");
+            e = -EINVAL;
+            goto cleanup;
+        }
     } else {
-	context->prefix = NULL;
+        context->prefix = NULL;
     }
 
     context->values[REFERENCE] = reference;
@@ -1041,12 +1065,18 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
     context->ext.callback = &callbacks;
     context->ext.private_data = context;
 
+    /* Try loading FFTW wisdom. */
+
+    context->wisdom_path = wisdom_path;
+    if(context->wisdom_path && fftwf_import_wisdom_from_filename(context->wisdom_path) != 1) {
+        SNDERR("Failed loading wisdom from %s, continuing anyway", context->wisdom_path);
+    }
+
     /* Create the plugin. */
 
     if ((e = snd_pcm_extplug_create(&context->ext, name, root,
                                     slave, stream, mode)) < 0) {
-        free(context);
-        return e;
+        goto cleanup;
     }
 
     /* Set PCM constraints. */
@@ -1054,15 +1084,13 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
     if ((e = snd_pcm_extplug_set_param(&context->ext,
                                        SND_PCM_EXTPLUG_HW_FORMAT,
                                        SND_PCM_FORMAT_FLOAT)) < 0) {
-        free(context);
-        return e;
+        goto cleanup;
     }
 
     if ((e = snd_pcm_extplug_set_slave_param(&context->ext,
                                              SND_PCM_EXTPLUG_HW_FORMAT,
                                              SND_PCM_FORMAT_FLOAT)) < 0) {
-        free(context);
-        return e;
+        goto cleanup;
     }
 
     /* Try to open the card's ctl and install (or uninstall, if so
@@ -1076,6 +1104,12 @@ SND_PCM_PLUGIN_DEFINE_FUNC(loudness)
     *pcmp = context->ext.pcm;
 
     return 0;
+
+cleanup:
+    if(context->prefix) free((void*)context->prefix);
+    if(context->wisdom_path) free((void*)context->wisdom_path);
+    free(context);
+    return e;
 }
 
 SND_PCM_PLUGIN_SYMBOL(loudness)

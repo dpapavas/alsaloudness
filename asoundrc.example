@@ -26,6 +26,12 @@ pcm.plugloudness {
     # window 4096
     # fft 16384
 
+    # The setting below is optional. If it points to a writeable file,
+    # it will be used as cache to save some CPU time, at the cost of a
+    # slower first run.
+
+    # wisdom_path "/home/foo/.cache/alsa/loudness_wisdom"
+
     # The values below will be used if a mixer control is not desired,
     # or can't be installed.
 
