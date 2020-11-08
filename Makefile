@@ -1,8 +1,17 @@
-DEBUG = no	# Set to yes, for a debug build.
-BENCHMARK = no	# Set to yes, for an optimized build with debug output.
-THREADED = yes	# Set to no, to disable multithreading.
-PLOT = no	# Set to yes, to enable dumping of filter response plots.
-LIB32= no # Set to yes, to build lib32 version for 64-bit systems
+# Set to yes, for a debug build.
+DEBUG=no
+
+# Set to yes, for an optimized build with debug output.
+BENCHMARK=no
+
+# Set to no, to disable multithreading.
+THREADED=yes
+
+# Set to yes, to enable dumping of filter response plots.
+PLOT=no
+
+# Set to yes, to build lib32 version for 64-bit systems.
+LIB32=no
 
 PREFIX = /usr/local
 LIBDIR = $(PREFIX)/lib
