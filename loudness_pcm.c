@@ -297,6 +297,7 @@ static snd_pcm_sframes_t transfer_callback(
     snd_pcm_uframes_t size)
 {
     struct context *context = (struct context *)ext->private_data;
+    int update = 0;
     float c;
     unsigned int i;
     int j;
@@ -304,77 +305,6 @@ static snd_pcm_sframes_t transfer_callback(
     const unsigned int M = context->impulse_length;
     const unsigned int N = context->fft_length;
     const int C = ext->channels;
-
-    /* Handle any pending ctl events and update the filter, if
-     * necessary. */
-
-    if (context->ctl) {
-        snd_ctl_event_t *event;
-        int update = 0;
-
-        snd_ctl_event_alloca(&event);
-
-        while (snd_ctl_read(context->ctl, event) > 0) {
-            unsigned int i;
-
-            snd_ctl_read(context->ctl, event);
-
-            /* There's only this one type of event, at the time of
-             * writing, but one never knows what the future holds. */
-
-            if (snd_ctl_event_get_type(event) != SND_CTL_EVENT_ELEM) {
-                continue;
-            }
-
-            /* Loop through our controls and see if the event concerns us.
-             * Update the filter parameters, if necessary. */
-
-            for (i = 0, update = 0 ; i < CONTROLS_COUNT ; i += 1) {
-                int p;
-
-                if (!context->prefix) {
-                    p = !strcmp(CONTROLS[i].name,
-                                snd_ctl_event_elem_get_name(event));
-                } else {
-                    char s[strlen(context->prefix) +
-                           strlen(CONTROLS[i].name) + 1];
-
-                    strcpy(s, context->prefix);
-                    strcat(s, CONTROLS[i].name);
-
-                    p = !strcmp(s, snd_ctl_event_elem_get_name(event));
-                }
-
-                if (p) {
-                    snd_ctl_elem_id_t *id;
-                    snd_ctl_elem_value_t *v;
-                    long l;
-
-                    snd_ctl_elem_value_alloca(&v);
-                    snd_ctl_elem_id_alloca(&id);
-
-                    snd_ctl_event_elem_get_id(event, id);
-                    snd_ctl_elem_value_set_id(v, id);
-
-                    if (snd_ctl_elem_read(context->ctl, v) == 0 &&
-                        ((l = snd_ctl_elem_value_get_integer(v, 0)) !=
-                         context->values[i])) {
-                        context->values[i] = l;
-                        update = 1;
-                    }
-                }
-            }
-        }
-
-        /* If the filter's configuration changed, update its frequency
-         * response. */
-
-        if (update &&
-            context->values[COMPENSATE] &&
-            context->values[ATTENUATION] < 0) {
-            update_filter_weights(context);
-        }
-    }
 
 #ifndef NDEBUG
     struct timespec t_0;
@@ -413,55 +343,144 @@ static snd_pcm_sframes_t transfer_callback(
         }
     }
 
-    /* Filter the samples normally if we're compensating, otherwise
-     * copy them straight to the output.  Note that a copy is
-     * necessary, because we want to keep the input buffer filled, in
-     * order to be able to switch between compensation and straight
-     * attenuation on the fly. */
+    while (1) {
+        /* Filter the samples normally if we're compensating, otherwise
+         * copy them straight to the output.  Note that a copy is
+         * necessary, because we want to keep the input buffer filled, in
+         * order to be able to switch between compensation and straight
+         * attenuation on the fly. */
 
-    if (context->values[COMPENSATE] &&
-        context->values[ATTENUATION] < 0) {
-        fftwf_execute(context->input_to_bins);
+        if (context->values[COMPENSATE] &&
+            context->values[ATTENUATION] < 0) {
+            fftwf_execute(context->input_to_bins);
 
-        for (i = 0 ; i < N / 2 + 1 ; i += 1) {
-            for (j = 0 ; j < C ; j += 1) {
-                context->bins[C * i + j] *= context->weights[i];
+            for (i = 0 ; i < N / 2 + 1 ; i += 1) {
+                for (j = 0 ; j < C ; j += 1) {
+                    context->bins[C * i + j] *= context->weights[i];
+                }
+            }
+
+            fftwf_execute(context->bins_to_output);
+
+            /* FFTW calculates an unnormalized FFT transform, so the filter
+             * output, needs to be scaled by 1 / N, when we're compensating. */
+
+            c = 1.0 / N;
+        } else {
+            j = (N - size) * C;
+
+            memcpy(context->output + j,
+                   context->input + j,
+                   size * C * sizeof(context->input[0]));
+
+            /* When not compensating, we scale the input samples, to
+             * achieve straight, uncompensated attenuation of the
+             * specified amount. */
+
+            c = expf(0.05 * logf(10) * (float)context->values[ATTENUATION]);
+        }
+
+        /* Copy the filtered samples into ALSA's buffer, de/interleaving
+         * them as required. */
+
+        for (j = 0 ; j < C ; j += 1) {
+            const snd_pcm_channel_area_t *a = &dst_areas[j];
+            float *s;
+            unsigned char *t;
+
+            s = context->output + (N - size) * C + j;
+            t = (unsigned char *)(a->addr) + (a->first + a->step * dst_offset) / 8;
+
+            for (i = 0 ; i < size ; i += 1) {
+                float *f, lambda;
+
+                f = (float *)(t + i * a->step / 8);
+                lambda = (float)i / size;
+
+                if (update) {
+                    *f = *f * (1.0 - lambda) + lambda * s[i * C] * c;
+                } else {
+                    *f = s[i * C] * c;
+                }
             }
         }
 
-        fftwf_execute(context->bins_to_output);
+        if (update) {
+            break;
+        }
 
-        /* FFTW calculates an unnormalized FFT transform, so the filter
-         * output, needs to be scaled by 1 / N, when we're compensating. */
+        /* Handle any pending ctl events and update the filter, if
+         * necessary. */
 
-        c = 1.0 / N;
-    } else {
-        j = (N - size) * C;
+        if (context->ctl) {
+            snd_ctl_event_t *event;
 
-        memcpy(context->output + j,
-               context->input + j,
-               size * C * sizeof(context->input[0]));
+            snd_ctl_event_alloca(&event);
 
-        /* When not compensating, we scale the input samples, to
-         * achieve straight, uncompensated attenuation of the
-         * specified amount. */
+            while (snd_ctl_read(context->ctl, event) > 0) {
+                unsigned int i;
 
-        c = expf(0.05 * logf(10) * (float)context->values[ATTENUATION]);
-    }
+                snd_ctl_read(context->ctl, event);
 
-    /* Copy the filtered samples into ALSA's buffer, de/interleaving
-     * them as required. */
+                /* There's only this one type of event, at the time of
+                 * writing, but one never knows what the future holds. */
 
-    for (j = 0 ; j < C ; j += 1) {
-        const snd_pcm_channel_area_t *a = &dst_areas[j];
-        float *s;
-        unsigned char *t;
+                if (snd_ctl_event_get_type(event) != SND_CTL_EVENT_ELEM) {
+                    continue;
+                }
 
-        s = context->output + (N - size) * C + j;
-        t = (unsigned char *)(a->addr) + (a->first + a->step * dst_offset) / 8;
+                /* Loop through our controls and see if the event concerns us.
+                 * Update the filter parameters, if necessary. */
 
-        for (i = 0 ; i < size ; i += 1) {
-            *(float *)(t + i * a->step / 8) = s[i * C] * c;
+                for (i = 0, update = 0 ; i < CONTROLS_COUNT ; i += 1) {
+                    int p;
+
+                    if (!context->prefix) {
+                        p = !strcmp(CONTROLS[i].name,
+                                    snd_ctl_event_elem_get_name(event));
+                    } else {
+                        char s[strlen(context->prefix) +
+                               strlen(CONTROLS[i].name) + 1];
+
+                        strcpy(s, context->prefix);
+                        strcat(s, CONTROLS[i].name);
+
+                        p = !strcmp(s, snd_ctl_event_elem_get_name(event));
+                    }
+
+                    if (p) {
+                        snd_ctl_elem_id_t *id;
+                        snd_ctl_elem_value_t *v;
+                        long l;
+
+                        snd_ctl_elem_value_alloca(&v);
+                        snd_ctl_elem_id_alloca(&id);
+
+                        snd_ctl_event_elem_get_id(event, id);
+                        snd_ctl_elem_value_set_id(v, id);
+
+                        if (snd_ctl_elem_read(context->ctl, v) == 0 &&
+                            ((l = snd_ctl_elem_value_get_integer(v, 0)) !=
+                             context->values[i])) {
+                            context->values[i] = l;
+                            update = 1;
+                        }
+                    }
+                }
+            }
+
+            /* If the filter's configuration changed, update its frequency
+             * response. */
+
+            if (update &&
+                context->values[COMPENSATE] &&
+                context->values[ATTENUATION] < 0) {
+                    update_filter_weights(context);
+            }
+        }
+
+        if (!update) {
+            break;
         }
     }
 
